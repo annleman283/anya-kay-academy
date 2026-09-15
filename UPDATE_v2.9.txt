@@ -1,0 +1,14 @@
+ANYA KAY Academy v2.9 SAFE FIXES
+
+IMPORTANT: This update intentionally DOES NOT contain lessons.db.
+Do not replace or delete the live database. Existing students, lesson progress,
+test attempts and answers remain in the existing database.
+
+Changes:
+- Additional lesson materials with type "video" play inside Academy.
+- Documents/presentations remain download-only.
+- Final exam answer buttons fixed.
+- "Мои ошибки" opens and shows error details.
+- Student icon added to the avatar circle.
+- Cyrillic "изгиб Л" is safely corrected to Latin "изгиб L" on startup.
+- No reset/delete/migration of students, attempts, answers or lesson progress.

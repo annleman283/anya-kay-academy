@@ -36,6 +36,8 @@ def ensure_tables():
  CREATE TABLE IF NOT EXISTS academy_material_unlock(material_id INTEGER PRIMARY KEY,unlock_mode TEXT NOT NULL DEFAULT 'always');
  ''')
  with conn() as c:
+  # Safe content correction only: does not reset students, attempts, answers or progress.
+  c.execute("UPDATE questions SET question_text=REPLACE(question_text,'изгиб Л','изгиб L') WHERE question_text LIKE '%изгиб Л%'")
   n=c.execute('SELECT COUNT(*) n FROM academy_exam_questions').fetchone()['n']
   if not n:
    try:
@@ -166,7 +168,7 @@ class H(SimpleHTTPRequestHandler):
   self.end_headers(); self.wfile.write(data)
  def do_GET(self):
   p=urllib.parse.urlparse(self.path); uid,u=self.who()
-  if p.path=='/health':return self.j({'ok':True,'db':db_ready(),'version':'2.8-polish-update'})
+  if p.path=='/health':return self.j({'ok':True,'db':db_ready(),'version':'2.9-safe-fixes'})
   if p.path=='/api/bootstrap':return self.j(bootstrap(uid,u.get('first_name') or 'Ученица',u.get('_auth_reason','')))
   if p.path.startswith('/api/lesson/'):
    lid=int(p.path.rsplit('/',1)[-1]); l=row('SELECT * FROM lessons WHERE id=?',(lid,))
@@ -420,4 +422,4 @@ class H(SimpleHTTPRequestHandler):
   return self.j({'error':'not_found'},404)
 
 if __name__=='__main__':
- ensure_tables(); print(f'ANYA KAY Academy v2.7 BIG UPDATE on :{PORT} | DB={DB_PATH}'); ThreadingHTTPServer(('0.0.0.0',PORT),H).serve_forever()
+ ensure_tables(); print(f'ANYA KAY Academy v2.9 SAFE FIXES on :{PORT} | DB={DB_PATH}'); ThreadingHTTPServer(('0.0.0.0',PORT),H).serve_forever()
