@@ -21,6 +21,7 @@ def ensure_tables():
     CREATE TABLE IF NOT EXISTS academy_notes(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,lesson_id INTEGER NOT NULL,note TEXT,updated_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(user_id,lesson_id));
     CREATE TABLE IF NOT EXISTS academy_bookmarks(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,lesson_id INTEGER NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(user_id,lesson_id));
     CREATE TABLE IF NOT EXISTS academy_final_attempts(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,score INTEGER NOT NULL,total INTEGER NOT NULL,passed INTEGER NOT NULL,finished_at TEXT DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS academy_profiles(user_id INTEGER PRIMARY KEY,full_name TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP,updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
     ''')
 
 def verify(raw):
@@ -62,7 +63,9 @@ def bootstrap(uid,first):
     wrong=rows('''SELECT a.question_id,a.question_text,a.correct_text,l.id lesson_id,l.title lesson_title,COUNT(*) mistakes FROM answers a JOIN lessons l ON l.id=a.lesson_id WHERE a.user_id=? AND a.is_correct=0 GROUP BY a.question_id,a.question_text,a.correct_text,l.id,l.title ORDER BY mistakes DESC''',(uid,)) if live and uid else []
     mats=rows('SELECT * FROM bonus_materials ORDER BY order_num') if live else []
     finals=row('SELECT * FROM academy_final_attempts WHERE user_id=? AND passed=1 ORDER BY finished_at DESC LIMIT 1',(uid,)) if live and uid else None
-    return {'mode':'live' if live else 'preview','user':{'id':uid,'first_name':first,'is_admin':uid in ADMIN_IDS},'progress':{'percent':pct,'completed':completed,'total':total,'current':current,'final_passed':bool(finals)},'lessons':ls,'mistakes':wrong,'bonus_materials':mats}
+    prof=row('SELECT full_name FROM academy_profiles WHERE user_id=?',(uid,)) if live and uid else None
+    full_name=(prof or {}).get('full_name','')
+    return {'mode':'live' if live else 'preview','needs_profile':bool(live and uid and not full_name),'user':{'id':uid,'first_name':first,'full_name':full_name,'is_admin':uid in ADMIN_IDS},'progress':{'percent':pct,'completed':completed,'total':total,'current':current,'final_passed':bool(finals)},'lessons':ls,'mistakes':wrong,'bonus_materials':mats}
 
 def media_url(fid):
     if not BOT_TOKEN:return None
@@ -122,6 +125,14 @@ class H(SimpleHTTPRequestHandler):
         if not uid:return self.j({'error':'Открой приложение внутри Telegram для сохранения данных'},401)
         if not db_ready():return self.j({'error':'База курса ещё не подключена'},503)
         ensure_tables()
+        if p=='/api/profile':
+            import re
+            name=' '.join(str(d.get('full_name','')).strip().split())
+            if not re.fullmatch(r"[A-Za-z][A-Za-z'’-]+(?: [A-Za-z][A-Za-z'’-]+)+",name):
+                return self.j({'error':'Введи имя и фамилию английскими буквами'},400)
+            with conn() as c:
+                c.execute('INSERT INTO academy_profiles(user_id,full_name) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET full_name=excluded.full_name,updated_at=CURRENT_TIMESTAMP',(uid,name))
+            return self.j({'ok':True,'full_name':name})
         if p=='/api/note':
             with conn() as c:c.execute('INSERT INTO academy_notes(user_id,lesson_id,note) VALUES(?,?,?) ON CONFLICT(user_id,lesson_id) DO UPDATE SET note=excluded.note,updated_at=CURRENT_TIMESTAMP',(uid,int(d['lesson_id']),d.get('note','')))
             return self.j({'ok':True})
