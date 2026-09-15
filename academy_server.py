@@ -49,11 +49,24 @@ def verify_detail(raw):
 def verify(raw):
  return verify_detail(raw)[0]
 
+def verify_academy_auth(h):
+ try:
+  uid=int(h.get('X-Academy-Uid','0') or 0); ts=int(h.get('X-Academy-Ts','0') or 0); got=h.get('X-Academy-Sig','')
+  if not uid or not ts or not got:return None
+  if abs(int(time.time())-ts)>86400:return None
+  payload=f'{uid}:{ts}'
+  want=hmac.new(BOT_TOKEN.encode(),payload.encode(),hashlib.sha256).hexdigest() if BOT_TOKEN else ''
+  if not want or not hmac.compare_digest(want,got):return None
+  return {'id':uid,'first_name':'Ученица','username':'','_auth_reason':'bot_signed_link'}
+ except:return None
+
 def user(h):
  raw=h.get('X-Telegram-Init-Data','')
  u,reason=verify_detail(raw)
  if u:
-  u['_auth_reason']='ok'; return u
+  u['_auth_reason']='telegram_initData'; return u
+ signed=verify_academy_auth(h)
+ if signed:return signed
  if DEV_USER_ID:return {'id':DEV_USER_ID,'first_name':'Анна','username':'demo','_auth_reason':'DEV_USER_ID'}
  return {'id':0,'first_name':'Анна','username':'preview','_auth_reason':reason}
 def display_no(order):return max(0,int(order)-1)
@@ -106,7 +119,7 @@ class H(SimpleHTTPRequestHandler):
   self.send_response(status); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Length',str(len(b))); self.end_headers(); self.wfile.write(b)
  def do_GET(self):
   p=urllib.parse.urlparse(self.path); uid,u=self.who()
-  if p.path=='/health':return self.j({'ok':True,'db':db_ready(),'version':'2.3'})
+  if p.path=='/health':return self.j({'ok':True,'db':db_ready(),'version':'2.5-ready-auth'})
   if p.path=='/api/bootstrap':return self.j(bootstrap(uid,u.get('first_name') or 'Ученица',u.get('_auth_reason','')))
   if p.path.startswith('/api/lesson/'):
    lid=int(p.path.rsplit('/',1)[-1]); l=row('SELECT * FROM lessons WHERE id=?',(lid,))
@@ -213,4 +226,4 @@ class H(SimpleHTTPRequestHandler):
   return self.j({'error':'not_found'},404)
 
 if __name__=='__main__':
- ensure_tables(); print(f'ANYA KAY Academy v2.3 on :{PORT} | DB={DB_PATH}'); ThreadingHTTPServer(('0.0.0.0',PORT),H).serve_forever()
+ ensure_tables(); print(f'ANYA KAY Academy v2.5 READY AUTH on :{PORT} | DB={DB_PATH}'); ThreadingHTTPServer(('0.0.0.0',PORT),H).serve_forever()
