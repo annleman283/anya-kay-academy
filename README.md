@@ -1,27 +1,29 @@
-# ANYA KAY Academy v2.3 — fixes after phone test
+# ANYA KAY Academy v2.7 — BIG UPDATE
 
-Исправлено:
-- тестовые варианты теперь настоящие кнопки и нажимаются на телефоне;
-- обязательная регистрация + автоматическая экскурсия после первого ввода имени;
-- повторная экскурсия получила кнопку возврата;
-- убран непонятный символ у закрытых уроков, показывается номер и подпись «закрыт»;
-- возврат после «Задать вопрос Ане» восстанавливает открытый урок; незавершённый тест сохраняется локально;
-- Telegram-ссылка бонусного закрытого канала открывается как ссылка, а не как file_id;
-- вместо скачивания JSON при неподключённом Telegram-файле показывается понятное сообщение;
-- для администратора в профиле появилась кнопка «Панель администратора» с ученицами и редактированием графика.
+Built on the working v2.6 / signed Telegram Academy auth flow. Do not change the educational bot for this update.
 
-## ОБЯЗАТЕЛЬНО в Railway
-У Academy должны быть переменные:
+## Included
+- Final theory exam: 24 supplied questions, shuffled questions/options, pass threshold 70%, unlimited retries, result stored in admin/student profile.
+- Successful exam celebration and transition to `Мой график`; no certificate feature.
+- Schedule preserves pasted line breaks/paragraphs.
+- Note save has visible button state + center-screen confirmation.
+- Student admin card: progress by lesson, attempts, best scores, mistakes count, final exam result, last activity, admin note, schedule, unlock lesson, reset lesson test.
+- Course admin: create/edit/delete/publish lessons; edit title/description/order; YouTube URL or uploaded lesson video; add/replace/delete lesson materials; edit lesson questions, answers, correct answer, explanation, and question photo.
+- Bonus materials admin: add/edit/replace/delete.
+- Runtime uploads are outside GitHub.
 
-`BOT_TOKEN` = токен ТОГО ЖЕ учебного Telegram-бота, в котором были загружены старые пособия/гайды.
+## Railway media storage — IMPORTANT
+Create a Railway Volume for the Academy service and mount it, for example at `/data`.
+Set:
 
-`ADMIN_IDS=6983137801`
+`MEDIA_DIR=/data/academy_media`
 
-Без BOT_TOKEN Telegram не может отдать старые материалы по их `file_id`, а Academy не может безопасно определить Telegram-пользователя для регистрации и прогресса.
+Without a persistent volume, files uploaded from the admin panel can disappear after a redeploy/restart. Code remains in GitHub; uploaded PPTX/PDF/images/videos stay on the volume.
 
-После добавления переменных сделай Redeploy.
+Existing environment variables remain unchanged: `BOT_TOKEN`, `ADMIN_IDS`, `DB_PATH` etc. Keep the same working values from v2.6.
 
-## Материалы
-Локальные PDF уроков 9–13 работают без BOT_TOKEN. Старое базовое пособие, видео-материалы и 4 Telegram-гайда находятся в Telegram и требуют BOT_TOKEN учебного бота. Пятый бонус — ссылка на закрытый Telegram-канал — теперь открывается напрямую.
+## Deployment
+Upload this build to the **Academy repository only**. Do not replace or redeploy the educational bot code for v2.7. Railway should redeploy the Academy service from GitHub.
 
-Следующий запланированный этап админки: загрузка/замена файлов уроков из панели без GitHub.
+## Safety
+Before connecting/changing a production DB, keep a backup of the current `lessons.db`. Existing lesson/test data are preserved; v2.7 only adds Academy tables when missing.
