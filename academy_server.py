@@ -63,10 +63,11 @@ def bootstrap(uid,first):
  onboard=row('SELECT completed FROM academy_onboarding WHERE user_id=?',(uid,)) if uid else None
  finals=row('SELECT id FROM academy_final_attempts WHERE user_id=? AND passed=1 LIMIT 1',(uid,)) if uid else None
  schedule=rows('SELECT * FROM academy_schedule WHERE user_id=? ORDER BY event_date,event_time,order_num,id',(uid,)) if uid else []
- return {'mode':'live','needs_profile':bool(uid and not full),'needs_onboarding':bool(uid and full and not (onboard or {}).get('completed')),'user':{'id':uid,'first_name':first,'full_name':full,'is_admin':uid in ADMIN_IDS},'progress':{'percent':pct,'completed':completed,'total':total,'current':current,'final_passed':bool(finals)},'lessons':ls,'mistakes':wrong,'bonus_materials':rows('SELECT * FROM bonus_materials ORDER BY order_num'),'schedule':schedule}
+ return {'mode':'live','telegram_ready':bool(BOT_TOKEN),'needs_profile':bool(uid and not full),'needs_onboarding':bool(uid and full and not (onboard or {}).get('completed')),'user':{'id':uid,'first_name':first,'full_name':full,'is_admin':uid in ADMIN_IDS},'progress':{'percent':pct,'completed':completed,'total':total,'current':current,'final_passed':bool(finals)},'lessons':ls,'mistakes':wrong,'bonus_materials':rows('SELECT * FROM bonus_materials ORDER BY order_num'),'schedule':schedule}
 
 def media_url(fid):
- if not BOT_TOKEN:raise RuntimeError('BOT_TOKEN не подключён')
+ if str(fid).startswith(('http://','https://')):return str(fid)
+ if not BOT_TOKEN:raise RuntimeError('Материал хранится в Telegram. Для него нужно подключить BOT_TOKEN учебного бота в Railway.')
  with urllib.request.urlopen(f'https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={urllib.parse.quote(fid)}',timeout=10) as r:d=json.load(r)
  return f"https://api.telegram.org/file/bot{BOT_TOKEN}/{d['result']['file_path']}"
 
@@ -88,9 +89,12 @@ class H(SimpleHTTPRequestHandler):
   self.send_response(302); self.send_header('Location',url)
   if download:self.send_header('Content-Disposition',f'attachment; filename="{download}"')
   self.end_headers()
+ def html_error(self,msg,status=502):
+  b=("<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><style>body{font-family:Arial;background:#f4eee7;color:#241b1d;padding:28px}div{max-width:520px;margin:auto;background:white;padding:22px;border-radius:18px}h2{color:#64142b}</style><div><h2>Материал пока не открывается</h2><p>"+str(msg)+"</p><p>Вернись в Academy. После подключения Telegram-файлов эта кнопка будет работать.</p></div>").encode('utf-8')
+  self.send_response(status); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Length',str(len(b))); self.end_headers(); self.wfile.write(b)
  def do_GET(self):
   p=urllib.parse.urlparse(self.path); uid,u=self.who()
-  if p.path=='/health':return self.j({'ok':True,'db':db_ready(),'version':'2.0'})
+  if p.path=='/health':return self.j({'ok':True,'db':db_ready(),'version':'2.3'})
   if p.path=='/api/bootstrap':return self.j(bootstrap(uid,u.get('first_name') or 'Ученица'))
   if p.path.startswith('/api/lesson/'):
    lid=int(p.path.rsplit('/',1)[-1]); l=row('SELECT * FROM lessons WHERE id=?',(lid,))
@@ -114,10 +118,10 @@ class H(SimpleHTTPRequestHandler):
     target=('previews/'+f['preview_name']) if action=='view' and f.get('preview_name') else ('materials/'+f['stored_name'])
     return self.redirect('/'+target)
    try:return self.redirect(media_url(fid))
-   except Exception as e:return self.j({'error':str(e)},502)
+   except Exception as e:return self.html_error(str(e))
   if p.path.startswith('/api/media/'):
    try:return self.redirect(media_url(urllib.parse.unquote(p.path.split('/api/media/',1)[1])))
-   except Exception as e:return self.j({'error':str(e)},502)
+   except Exception as e:return self.html_error(str(e))
   if p.path=='/api/saved':return self.j(rows('SELECT l.* FROM academy_bookmarks b JOIN lessons l ON l.id=b.lesson_id WHERE b.user_id=? ORDER BY b.created_at DESC',(uid,)) if uid else [])
   if p.path=='/api/notes':return self.j(rows('SELECT n.*,l.title,l.order_num FROM academy_notes n JOIN lessons l ON l.id=n.lesson_id WHERE n.user_id=? AND TRIM(n.note)<>"" ORDER BY n.updated_at DESC',(uid,)) if uid else [])
   if p.path=='/api/analytics':
@@ -126,6 +130,9 @@ class H(SimpleHTTPRequestHandler):
   if p.path=='/api/final/start':
    qs=rows('SELECT q.*,l.title lesson_title FROM questions q JOIN lessons l ON l.id=q.lesson_id WHERE l.order_num>1'); random.shuffle(qs); qs=qs[:min(40,len(qs))]
    return self.j({'questions':[dict(shuffled_question(q),lesson_title=q['lesson_title']) for q in qs]})
+  if p.path=='/api/admin/overview':
+   if uid not in ADMIN_IDS:return self.j({'error':'Нет доступа'},403)
+   return self.j({'students':row('SELECT COUNT(*) n FROM students')["n"],'lessons':row('SELECT COUNT(*) n FROM lessons')["n"],'questions':row('SELECT COUNT(*) n FROM questions')["n"],'materials':row('SELECT COUNT(*) n FROM lesson_materials')["n"]+row('SELECT COUNT(*) n FROM bonus_materials')["n"]})
   if p.path=='/api/admin/students':
    if uid not in ADMIN_IDS:return self.j({'error':'Нет доступа'},403)
    return self.j(rows('SELECT s.*,p.full_name certificate_name FROM students s LEFT JOIN academy_profiles p ON p.user_id=s.user_id ORDER BY s.last_activity DESC'))
@@ -194,4 +201,4 @@ class H(SimpleHTTPRequestHandler):
   return self.j({'error':'not_found'},404)
 
 if __name__=='__main__':
- ensure_tables(); print(f'ANYA KAY Academy v2.0 on :{PORT} | DB={DB_PATH}'); ThreadingHTTPServer(('0.0.0.0',PORT),H).serve_forever()
+ ensure_tables(); print(f'ANYA KAY Academy v2.3 on :{PORT} | DB={DB_PATH}'); ThreadingHTTPServer(('0.0.0.0',PORT),H).serve_forever()
