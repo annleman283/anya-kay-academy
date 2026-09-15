@@ -30,20 +30,32 @@ def ensure_tables():
  CREATE TABLE IF NOT EXISTS academy_local_files(key TEXT PRIMARY KEY,original_name TEXT NOT NULL,stored_name TEXT NOT NULL,preview_name TEXT,mime_type TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
  ''')
 
-def verify(raw):
- if not raw or not BOT_TOKEN:return None
+def verify_detail(raw):
+ if not raw:return None,'initData отсутствует'
+ if not BOT_TOKEN:return None,'BOT_TOKEN отсутствует на сервере Academy'
  try:
-  d=dict(urllib.parse.parse_qsl(raw,keep_blank_values=True)); got=d.pop('hash',''); check='\n'.join(f'{k}={v}' for k,v in sorted(d.items()))
+  d=dict(urllib.parse.parse_qsl(raw,keep_blank_values=True)); got=d.pop('hash','')
+  if not got:return None,'В initData нет hash'
+  check='\n'.join(f'{k}={v}' for k,v in sorted(d.items()))
   secret=hmac.new(b'WebAppData',BOT_TOKEN.encode(),hashlib.sha256).digest(); want=hmac.new(secret,check.encode(),hashlib.sha256).hexdigest()
-  if not hmac.compare_digest(want,got) or int(time.time())-int(d.get('auth_date','0'))>86400:return None
-  return json.loads(d.get('user','{}'))
- except:return None
+  if not hmac.compare_digest(want,got):return None,'initData пришёл, но подпись не прошла проверку — BOT_TOKEN Academy не соответствует боту, который открыл Mini App'
+  auth=int(d.get('auth_date','0') or 0)
+  if auth and int(time.time())-auth>86400:return None,'Telegram initData старше 24 часов — полностью закрой и заново открой Mini App'
+  u=json.loads(d.get('user','{}'))
+  if not u.get('id'):return None,'Подпись верна, но Telegram не передал user.id'
+  return u,'ok'
+ except Exception as e:return None,'Ошибка разбора initData: '+type(e).__name__
+
+def verify(raw):
+ return verify_detail(raw)[0]
 
 def user(h):
- u=verify(h.get('X-Telegram-Init-Data',''))
- if u:return u
- if DEV_USER_ID:return {'id':DEV_USER_ID,'first_name':'Анна','username':'demo'}
- return {'id':0,'first_name':'Анна','username':'preview'}
+ raw=h.get('X-Telegram-Init-Data','')
+ u,reason=verify_detail(raw)
+ if u:
+  u['_auth_reason']='ok'; return u
+ if DEV_USER_ID:return {'id':DEV_USER_ID,'first_name':'Анна','username':'demo','_auth_reason':'DEV_USER_ID'}
+ return {'id':0,'first_name':'Анна','username':'preview','_auth_reason':reason}
 def display_no(order):return max(0,int(order)-1)
 def youtube_id(url):
  if not url:return ''
@@ -52,7 +64,7 @@ def shuffled_question(q):
  opts=json.loads(q['options']); random.shuffle(opts)
  return {'id':q['id'],'question_text':q['question_text'],'options':opts,'photo_file_id':q.get('photo_file_id'),'order_num':q.get('order_num')}
 
-def bootstrap(uid,first):
+def bootstrap(uid,first,auth_reason=""):
  ls=rows('SELECT * FROM lessons ORDER BY order_num'); st=row('SELECT * FROM students WHERE user_id=?',(uid,)) if uid else None; current=int((st or {}).get('current_lesson_order',1))
  attempts=rows('SELECT * FROM attempts WHERE user_id=? ORDER BY finished_at',(uid,)) if uid else []; passed={a['lesson_id'] for a in attempts if a['passed']}
  for l in ls:
@@ -63,7 +75,7 @@ def bootstrap(uid,first):
  onboard=row('SELECT completed FROM academy_onboarding WHERE user_id=?',(uid,)) if uid else None
  finals=row('SELECT id FROM academy_final_attempts WHERE user_id=? AND passed=1 LIMIT 1',(uid,)) if uid else None
  schedule=rows('SELECT * FROM academy_schedule WHERE user_id=? ORDER BY event_date,event_time,order_num,id',(uid,)) if uid else []
- return {'mode':'live','telegram_ready':bool(BOT_TOKEN),'needs_profile':bool(uid and not full),'needs_onboarding':bool(uid and full and not (onboard or {}).get('completed')),'user':{'id':uid,'first_name':first,'full_name':full,'is_admin':uid in ADMIN_IDS},'progress':{'percent':pct,'completed':completed,'total':total,'current':current,'final_passed':bool(finals)},'lessons':ls,'mistakes':wrong,'bonus_materials':rows('SELECT * FROM bonus_materials ORDER BY order_num'),'schedule':schedule}
+ return {'mode':'live','telegram_ready':bool(BOT_TOKEN),'needs_profile':bool(uid and not full),'needs_onboarding':bool(uid and full and not (onboard or {}).get('completed')),'user':{'id':uid,'first_name':first,'full_name':full,'is_admin':uid in ADMIN_IDS,'auth_reason':auth_reason},'progress':{'percent':pct,'completed':completed,'total':total,'current':current,'final_passed':bool(finals)},'lessons':ls,'mistakes':wrong,'bonus_materials':rows('SELECT * FROM bonus_materials ORDER BY order_num'),'schedule':schedule}
 
 def media_url(fid):
  if str(fid).startswith(('http://','https://')):return str(fid)
@@ -95,7 +107,7 @@ class H(SimpleHTTPRequestHandler):
  def do_GET(self):
   p=urllib.parse.urlparse(self.path); uid,u=self.who()
   if p.path=='/health':return self.j({'ok':True,'db':db_ready(),'version':'2.3'})
-  if p.path=='/api/bootstrap':return self.j(bootstrap(uid,u.get('first_name') or 'Ученица'))
+  if p.path=='/api/bootstrap':return self.j(bootstrap(uid,u.get('first_name') or 'Ученица',u.get('_auth_reason','')))
   if p.path.startswith('/api/lesson/'):
    lid=int(p.path.rsplit('/',1)[-1]); l=row('SELECT * FROM lessons WHERE id=?',(lid,))
    if not l:return self.j({'error':'not_found'},404)
