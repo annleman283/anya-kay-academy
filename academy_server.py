@@ -73,6 +73,16 @@ def verify_academy_auth(h):
   return {'id':uid,'first_name':'Ученица','username':'','_auth_reason':'bot_signed_link'}
  except:return None
 
+def verify_academy_query(path):
+ try:
+  q=urllib.parse.parse_qs(urllib.parse.urlparse(path).query)
+  uid=int((q.get('ak_uid') or ['0'])[0]); ts=int((q.get('ak_ts') or ['0'])[0]); got=(q.get('ak_sig') or [''])[0]
+  if not uid or not ts or not got or abs(int(time.time())-ts)>86400:return None
+  want=hmac.new(BOT_TOKEN.encode(),f'{uid}:{ts}'.encode(),hashlib.sha256).hexdigest() if BOT_TOKEN else ''
+  if not want or not hmac.compare_digest(want,got):return None
+  return {'id':uid,'first_name':'Ученица','username':'','_auth_reason':'bot_signed_query'}
+ except:return None
+
 def user(h):
  raw=h.get('X-Telegram-Init-Data','')
  u,reason=verify_detail(raw)
@@ -132,7 +142,9 @@ class H(SimpleHTTPRequestHandler):
   try:return json.loads(self.rfile.read(int(self.headers.get('Content-Length','0'))) or b'{}')
   except:return {}
  def who(self):
-  u=user(self.headers); return int(u.get('id',0)),u
+  u=user(self.headers)
+  if not u.get('id'):u=verify_academy_query(self.path) or u
+  return int(u.get('id',0)),u
  def redirect(self,url,download=None):
   self.send_response(302); self.send_header('Location',url)
   if download:self.send_header('Content-Disposition',f'attachment; filename="{download}"')
@@ -154,7 +166,7 @@ class H(SimpleHTTPRequestHandler):
   self.end_headers(); self.wfile.write(data)
  def do_GET(self):
   p=urllib.parse.urlparse(self.path); uid,u=self.who()
-  if p.path=='/health':return self.j({'ok':True,'db':db_ready(),'version':'2.7-big-update'})
+  if p.path=='/health':return self.j({'ok':True,'db':db_ready(),'version':'2.8-polish-update'})
   if p.path=='/api/bootstrap':return self.j(bootstrap(uid,u.get('first_name') or 'Ученица',u.get('_auth_reason','')))
   if p.path.startswith('/api/lesson/'):
    lid=int(p.path.rsplit('/',1)[-1]); l=row('SELECT * FROM lessons WHERE id=?',(lid,))
@@ -198,10 +210,16 @@ class H(SimpleHTTPRequestHandler):
   if p.path.startswith('/api/runtime-media/'):
    name=Path(urllib.parse.unquote(p.path.split('/api/runtime-media/',1)[1])).name; fp=MEDIA_DIR/name
    if not fp.exists():return self.j({'error':'Файл не найден'},404)
-   data=fp.read_bytes(); ctype=mimetypes.guess_type(fp.name)[0] or 'application/octet-stream'; self.send_response(200); self.send_header('Content-Type',ctype); self.send_header('Content-Length',str(len(data))); self.send_header('Cache-Control','private,max-age=3600')
+   ctype=mimetypes.guess_type(fp.name)[0] or 'application/octet-stream'; size=fp.stat().st_size; self.send_response(200); self.send_header('Content-Type',ctype); self.send_header('Content-Length',str(size)); self.send_header('Cache-Control','private,max-age=3600')
    if urllib.parse.parse_qs(p.query).get('download',['0'])[0]=='1':self.send_header('Content-Disposition',"attachment; filename*=UTF-8''"+urllib.parse.quote(fp.name))
    else:self.send_header('Content-Disposition','inline')
-   self.end_headers(); return self.wfile.write(data)
+   self.end_headers()
+   with fp.open('rb') as src:
+    while True:
+     chunk=src.read(1024*1024)
+     if not chunk:break
+     self.wfile.write(chunk)
+   return
   if p.path.startswith('/api/admin/student/'):
    if uid not in ADMIN_IDS:return self.j({'error':'Нет доступа'},403)
    sid=int(p.path.rsplit('/',1)[-1]); st=row('SELECT s.*,p.full_name FROM students s LEFT JOIN academy_profiles p ON p.user_id=s.user_id WHERE s.user_id=?',(sid,)) or {'user_id':sid}
@@ -236,9 +254,33 @@ class H(SimpleHTTPRequestHandler):
    sid=int(p.path.rsplit('/',1)[-1]); return self.j(rows('SELECT * FROM academy_schedule WHERE user_id=? ORDER BY event_date,event_time,order_num,id',(sid,)))
   return super().do_GET()
  def do_POST(self):
-  p=urllib.parse.urlparse(self.path).path; uid,u=self.who(); d=self.body()
+  p=urllib.parse.urlparse(self.path).path; uid,u=self.who()
   if not uid:return self.j({'error':'Открой приложение внутри Telegram для сохранения данных'},401)
   ensure_tables()
+  if p=='/api/admin/upload-file':
+   if uid not in ADMIN_IDS:return self.j({'error':'Нет доступа'},403)
+   try:name=Path(urllib.parse.unquote(self.headers.get('X-File-Name','file.bin'))).name
+   except:name='file.bin'
+   length=int(self.headers.get('Content-Length','0') or 0); limit=300*1024*1024
+   if length<=0:return self.j({'error':'Пустой файл'},400)
+   if length>limit:return self.j({'error':'Файл больше 300 МБ'},413)
+   safe=uuid.uuid4().hex+'_'+re.sub(r'[^A-Za-z0-9._-]+','_',name); fp=MEDIA_DIR/safe; left=length
+   try:
+    with fp.open('wb') as out:
+     while left>0:
+      chunk=self.rfile.read(min(1024*1024,left))
+      if not chunk:break
+      out.write(chunk); left-=len(chunk)
+    if left!=0:
+     try:fp.unlink()
+     except:pass
+     return self.j({'error':'Загрузка файла оборвалась'},400)
+    return self.j({'ok':True,'file_id':'runtime:'+safe,'name':name,'size':length})
+   except Exception as e:
+    try:fp.unlink()
+    except:pass
+    return self.j({'error':'Не удалось сохранить файл: '+str(e)},500)
+  d=self.body()
   if p=='/api/profile':
    name=' '.join(str(d.get('full_name','')).strip().split())
    if not re.fullmatch(r"[A-Za-z][A-Za-z'’-]+(?: [A-Za-z][A-Za-z'’-]+)+",name):return self.j({'error':'Введи имя и фамилию английскими буквами'},400)
@@ -278,10 +320,15 @@ class H(SimpleHTTPRequestHandler):
   if p=='/api/final/submit':
    given=d.get('answers',{}); qs=rows('SELECT * FROM academy_exam_questions'); score=0; total=len(qs); details=[]
    for q in qs:
-    opts=json.loads(q['options']); ct=opts[int(q['correct_index'])]; ch=str(given.get(str(q['id']),'—')); ok=ch==ct; score+=int(ok); details.append({'question_text':q['question_text'],'chosen_text':ch,'correct_text':ct,'is_correct':ok})
+    opts=json.loads(q['options']); ct=opts[int(q['correct_index'])]; ch=str(given.get(str(q['id']),'—')); ok=ch==ct; score+=int(ok); details.append({'question_text':q['question_text'],'chosen_text':ch,'correct_text':ct,'is_correct':ok,'order_num':q['order_num']})
    passed=bool(total and score/total>=FINAL_PASS_THRESHOLD); pct=round(score*100/total) if total else 0
    with conn() as c:c.execute('INSERT INTO academy_final_attempts(user_id,score,total,passed) VALUES(?,?,?,?)',(uid,score,total,int(passed)))
-   return self.j({'score':score,'total':total,'percent':pct,'passed':passed,'pass_percent':70,'answers':details})
+   topics=[('Основы: строение, рост и материалы',1,4),('Препараты и клей',5,9),('Постановка и качество работы',10,13),('Объёмы, рядность и моделирование',14,19),('Снятие, коррекция, безопасность и уход',20,24)]; weak=[]
+   for title,a,b in topics:
+    wrong=sum(1 for x in details if a<=int(x.get('order_num') or 0)<=b and not x['is_correct'])
+    if wrong:weak.append({'title':title,'mistakes':wrong})
+   weak.sort(key=lambda x:x['mistakes'],reverse=True)
+   return self.j({'score':score,'total':total,'percent':pct,'passed':passed,'pass_percent':70,'answers':details,'weak_topics':weak})
   if p=='/api/admin/student/note':
    if uid not in ADMIN_IDS:return self.j({'error':'Нет доступа'},403)
    sid=int(d['user_id']); note=str(d.get('note',''))
