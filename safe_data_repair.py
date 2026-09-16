@@ -1,9 +1,12 @@
 import json
 import os
+import shutil
 import sqlite3
 from pathlib import Path
 
-DB_PATH = os.getenv("DB_PATH", str(Path(__file__).with_name("lessons.db")))
+BASE = Path(__file__).parent
+DB_PATH = Path(os.getenv("DB_PATH", str(BASE / "lessons.db")))
+SOURCE_DB = BASE / "lessons.db"
 
 LESSON_TESTS = {
     "Урок 5. Виды ресниц": [
@@ -26,7 +29,6 @@ def find_lesson(c, wanted):
     row = c.execute("SELECT id,title FROM lessons WHERE title=?", (wanted,)).fetchone()
     if row:
         return row
-    # tolerate harmless spacing differences in the old database titles
     key = wanted.lower().replace(" ", "")
     for r in c.execute("SELECT id,title FROM lessons").fetchall():
         if str(r["title"]).lower().replace(" ", "") == key:
@@ -35,9 +37,7 @@ def find_lesson(c, wanted):
 
 
 def repair_test(c, lesson_id, questions):
-    existing = c.execute(
-        "SELECT id FROM questions WHERE lesson_id=? ORDER BY order_num,id", (lesson_id,)
-    ).fetchall()
+    existing = c.execute("SELECT id FROM questions WHERE lesson_id=? ORDER BY order_num,id", (lesson_id,)).fetchall()
     for i, (text, options, correct_index) in enumerate(questions, 1):
         payload = json.dumps(options, ensure_ascii=False)
         if i <= len(existing):
@@ -51,15 +51,18 @@ def repair_test(c, lesson_id, questions):
                 (lesson_id, text, payload, correct_index, "", None, i),
             )
     if len(existing) > len(questions):
-        extra_ids = [r["id"] for r in existing[len(questions):]]
-        c.executemany("DELETE FROM questions WHERE id=?", [(x,) for x in extra_ids])
+        c.executemany("DELETE FROM questions WHERE id=?", [(r["id"],) for r in existing[len(questions):]])
 
 
 def main():
-    if not Path(DB_PATH).exists():
-        print(f"safe_data_repair: DB not found at {DB_PATH}; nothing to do")
-        return
-    c = sqlite3.connect(DB_PATH, timeout=20)
+    if not DB_PATH.exists():
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if not SOURCE_DB.exists():
+            raise RuntimeError(f"Source DB not found: {SOURCE_DB}")
+        shutil.copy2(SOURCE_DB, DB_PATH)
+        print(f"safe_data_repair: seeded persistent DB at {DB_PATH}")
+
+    c = sqlite3.connect(str(DB_PATH), timeout=20)
     c.row_factory = sqlite3.Row
     try:
         for title, questions in LESSON_TESTS.items():
@@ -69,8 +72,6 @@ def main():
             repair_test(c, int(lesson["id"]), questions)
             print(f"safe_data_repair: restored {title} ({len(questions)} questions)")
 
-        # When an admin resets a lesson test, make that lesson current again.
-        # This keeps later lessons from remaining unlocked after the test result is removed.
         c.executescript("""
         CREATE TRIGGER IF NOT EXISTS academy_attempt_reset_relock
         BEFORE DELETE ON attempts
